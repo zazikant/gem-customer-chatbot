@@ -26,6 +26,7 @@ import {
 } from "@/lib/lead-capture";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { MessageContent } from "@/components/chat/message-content";
 import { Send } from "lucide-react";
 
 type Role = "user" | "assistant";
@@ -494,9 +495,7 @@ function Bubble({
               : "bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-50")
         }
       >
-        <div className="whitespace-pre-wrap break-words text-sm">
-          {msg.content || "…"}
-        </div>
+        <MessageContent content={msg.content || "…"} as={isUser ? "user" : "assistant"} />
       </div>
     </div>
   );
