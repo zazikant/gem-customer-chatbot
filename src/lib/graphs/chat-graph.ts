@@ -169,7 +169,7 @@ const refineAnswerNode = traceNode<LG2StateType>(
     });
 
     const [refined, toolTrace] = await traceTool("glm_reducer", () =>
-      refineAnswer(state.query, raw),
+      refineAnswer(state.query, raw, state.history),
     );
 
     const trace = { ...state.trace, tools: [...state.trace.tools, toolTrace] };

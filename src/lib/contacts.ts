@@ -54,8 +54,19 @@ export function renderRemarks(
   for (const m of messages) {
     const time = formatIstTime(date);
     const tag = m.source === "fallback" ? "bot (handoff)" : m.role;
-    const content = m.content.replace(/\s+/g, " ").trim().slice(0, 500);
-    lines.push(`  ${time} IST — ${tag}: ${content}`);
+    // Preserve the full content verbatim — do NOT trim or collapse whitespace.
+    // Previous versions sliced to 500 chars and replaced \s+ with a single
+    // space, which mangled multi-line answers and lost the tail of long
+    // responses. The remarks column is a TEXT field in Supabase and can
+    // hold arbitrarily long strings.
+    const content = m.content.trim();
+    // Indent continuation lines so multi-line content stays readable
+    // inside the per-message remark block.
+    const indented = content
+      .split("\n")
+      .map((l, i) => (i === 0 ? l : `      ${l}`))
+      .join("\n");
+    lines.push(`  ${time} IST — ${tag}: ${indented}`);
   }
   return lines.join("\n");
 }

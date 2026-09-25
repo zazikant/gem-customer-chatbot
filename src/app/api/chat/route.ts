@@ -118,12 +118,20 @@ export async function POST(req: Request) {
         } else {
           // ── Phase 2: ChatGraph ──
           emit("log", { line: `[graph] invoke ChatGraph` });
-          const result = await runChatGraph({
-            query: message,
-            history: (body.history ?? []).map((h) => ({
+          // Defensively filter the history the client sends: only keep
+          // real chat-phase Q&A turns. The capture-phase exchanges
+          // (greeting, "What's your name?", the name/email/phone/company
+          // values) would confuse the brain about what the user's "first
+          // question" actually was.
+          const chatHistory = (body.history ?? [])
+            .filter((h) => h && h.role && h.content)
+            .map((h) => ({
               role: h.role as "user" | "assistant" | "system",
               content: h.content,
-            })),
+            }));
+          const result = await runChatGraph({
+            query: message,
+            history: chatHistory,
             lead: lead ?? undefined,
             emit,
           });

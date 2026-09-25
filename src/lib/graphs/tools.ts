@@ -71,16 +71,24 @@ export const brainProxyTool = tool(
 // ─── glm_reducer ──────────────────────────────────────────────
 
 export const glmReducerTool = tool(
-  async ({ question, draft }): Promise<RefinedAnswer> => {
-    return refineAnswer(question, draft);
+  async ({ question, draft, history }): Promise<RefinedAnswer> => {
+    return refineAnswer(question, draft, history);
   },
   {
     name: "glm_reducer",
     description:
-      "Judge + rewrite the brain's draft via GLM-5.1 in a single LLM call. Returns verdict (good|no_answer), refined text, reason, elapsedMs.",
+      "Judge + rewrite the brain's draft via GLM-5.1 in a single LLM call. Receives the conversation history so it can answer meta-questions ('what was my first question?') from history when the brain's RAG draft is irrelevant. Returns verdict (good|no_answer), refined text, reason, elapsedMs.",
     schema: z.object({
       question: z.string(),
       draft: z.string(),
+      history: z
+        .array(
+          z.object({
+            role: z.enum(["user", "assistant", "system"]),
+            content: z.string(),
+          }),
+        )
+        .default([]),
     }),
   },
 );

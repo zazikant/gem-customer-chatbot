@@ -50,8 +50,7 @@ export const INITIAL_STATE: CaptureState = {
 export const FIELD_PROMPTS: Record<LeadField, string> = {
   name: "What is your **name**?",
   email: "Thanks! What is your **email** address?",
-  phone:
-    "Got it. What is your **phone** number? (with country code, e.g. +91 …)",
+  phone: "Got it. What is your **phone** number?",
   company:
     'Last question — what is your **company** name? *(Type "skip" if not applicable.)*',
 };
@@ -59,7 +58,9 @@ export const FIELD_PROMPTS: Record<LeadField, string> = {
 export const FIELD_ORDER: LeadField[] = ["name", "email", "phone", "company"];
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const PHONE_RE = /^\+[\d\s\-()]{6,20}$/;
+// Phone: 7-20 digits, optional leading +, spaces/dashes/parens allowed.
+// Country code is NOT required — local numbers like "9876543210" are accepted.
+const PHONE_RE = /^[+]?[\d\s\-()]{6,20}$/;
 const DIGIT_COUNT_RE = /\d/g;
 const SKIP_RE = /^(skip|none|n\/a|na|-|\.|—)$/i;
 
@@ -92,7 +93,7 @@ export function validateField(
       if (!PHONE_RE.test(trimmed)) {
         return {
           ok: false,
-          error: "Please include the country code starting with +, e.g. +91 98765 43210.",
+          error: "That doesn't look like a valid phone number — please use digits (and optionally spaces, dashes, or a leading +).",
         };
       }
       const digits = trimmed.match(DIGIT_COUNT_RE);

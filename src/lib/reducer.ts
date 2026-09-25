@@ -13,13 +13,18 @@ const DEFAULT_TIMEOUT_MS = 25_000;
 
 const REDUCER_SYSTEM_PROMPT = `You are a strict editor + judge for a customer-support chatbot.
 
-The user's question and the chatbot's draft answer are given. Your job:
+You are given: (a) the user's current question, (b) the chatbot's draft answer from the knowledge base, and (c) the recent conversation history (user + assistant turns, oldest first).
 
-1. Decide whether the draft is a real, useful response to the question.
-   - GOOD:    draft directly answers with concrete info (facts, steps, citations, links).
-   - NO_ANSWER: draft is empty, evasive, says "I don't know", says "no information", asks the user to contact support, or is otherwise not useful.
+Your job:
 
-2. If GOOD, REWRITE the draft for the end user. STRICTLY REMOVE all of these:
+1. JUDGE whether the draft is a real, useful response to the CURRENT question.
+
+   - GOOD:    draft directly answers the current question with concrete info (facts, steps, citations, links), OR the question is answerable from the conversation history (e.g. "what was my first question?", "what did you just say?", "can you repeat that?") and the draft either answers it or can be replaced with the history-derived answer.
+   - NO_ANSWER: draft is empty, evasive, says "I don't know", says "no information", asks the user to contact support, or is otherwise not useful AND the conversation history does not contain the answer either.
+
+   IMPORTANT: When the user asks a meta-question about the conversation itself ("what was my first question", "what did I ask earlier", "what was the last thing you said", "repeat your previous answer"), the answer comes from the CONVERSATION HISTORY, not from the knowledge-base draft. If the draft talks about something unrelated to the conversation (e.g. it's a retrieved note that doesn't match the meta-question), treat the draft as wrong and REPLACE the text with the correct answer derived from the history.
+
+2. If GOOD, REWRITE the answer for the end user. STRICTLY REMOVE all of these:
 
    Filler intros and meta-references (ban these):
    - "Based on your notes…", "Based on your saved notes…"
@@ -54,10 +59,11 @@ The user's question and the chatbot's draft answer are given. Your job:
    - Concrete exercise names, steps, lists, citations to external videos/links.
    - Markdown formatting (##, **, lists).
    - Original section structure.
+   - For meta-questions about the conversation, the actual content from history (e.g. quote the user's first question verbatim).
 
    Do NOT add new information. Do NOT invent. Do NOT speculate.
 
-3. If NO_ANSWER, set text to: "NO_ANSWER" (literally that string).
+3. If NO_ANSWER (draft is not useful AND history doesn't help), set text to: "NO_ANSWER" (literally that string).
 
 Output STRICT JSON, no preamble, no markdown fence:
 {"verdict":"good|no_answer","text":"<refined answer or NO_ANSWER>","reason":"<one short sentence>"}`;
@@ -74,6 +80,7 @@ export interface RefinedAnswer {
 export async function refineAnswer(
   question: string,
   draft: string,
+  history: Array<{ role: "user" | "assistant" | "system"; content: string }> = [],
 ): Promise<RefinedAnswer> {
   const start = Date.now();
   const { opencodeApiKey, opencodeModel } = getConfig();
@@ -85,6 +92,16 @@ export async function refineAnswer(
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+
+  // Render the conversation history as a readable block for the LLM.
+  // Only the last ~10 turns to keep the prompt small.
+  const recentHistory = history.slice(-10);
+  const historyBlock =
+    recentHistory.length > 0
+      ? recentHistory
+          .map((h) => `  ${h.role}: ${h.content.slice(0, 800)}`)
+          .join("\n")
+      : "(no prior conversation)";
 
   try {
     const response = await fetch(OPENCODE_GATEWAY, {
@@ -100,7 +117,10 @@ export async function refineAnswer(
           { role: "system", content: REDUCER_SYSTEM_PROMPT },
           {
             role: "user",
-            content: `Question:\n${question}\n\nDraft answer:\n${draft}`,
+            content:
+              `Conversation history (oldest first):\n${historyBlock}\n\n` +
+              `Current question:\n${question}\n\n` +
+              `Draft answer from knowledge base:\n${draft}`,
           },
         ],
         max_tokens: 2048,

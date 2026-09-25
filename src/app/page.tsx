@@ -1,16 +1,21 @@
 "use client";
 
 /**
- * GEM Customer Chatbot — main page.
+ * GEM Customer Chatbot — main page (clean chat-only UI).
  *
- * Two-pane layout:
- *   • Left  — Chat panel (LeadCaptureGraph → ChatGraph via /api/chat)
- *   • Right — LangGraph execution trace (live nodes + tools)
+ * Single full-screen chat window:
+ *   • Phase 1: LeadCaptureGraph (LG1) collects name → email → phone → company
+ *   • Phase 2: ChatGraph (LG2) answers questions via brain + GLM-5.1 reducer
  *
- * The chat panel runs through the lead-capture conversation first
- * (name → email → phone → company), then hands off to the chat-brain
- * + GLM-5.1 reducer for real Q&A. Every turn's graph trace is sent
- * back via the `trace` SSE event and rendered on the right.
+ * Streaming chunks from the brain are NOT shown to the user — they're
+ * accumulated internally and replaced by the final refined answer
+ * when the `done` event arrives. This gives a clean experience: the
+ * user sees a "Thinking…" indicator while the brain + reducer work,
+ * then the final answer appears all at once.
+ *
+ * Only chat-phase Q&A turns are sent as history to the brain, so the
+ * brain can correctly answer questions like "what was my first
+ * question?" without being confused by the capture-phase exchanges.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -19,18 +24,9 @@ import {
   type CaptureState,
   type Lead,
 } from "@/lib/lead-capture";
-import type { GraphTrace } from "@/lib/graphs/types";
-import { TracePanel } from "@/components/chat/trace-panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import {
-  Send,
-  RotateCcw,
-  PanelRightClose,
-  PanelRightOpen,
-  Phone,
-} from "lucide-react";
+import { Send } from "lucide-react";
 
 type Role = "user" | "assistant";
 type Source = "rag" | "llm" | "fallback" | "unknown";
@@ -39,22 +35,10 @@ interface Message {
   role: Role;
   content: string;
   source?: Source;
-  citations?: Array<{ id: string; title?: string; score: number }>;
   isFallback?: boolean;
-  elapsedMs?: number;
-  judgeVerdict?: "good" | "no_answer";
-  judgeReason?: string;
+  /** True for chat-phase Q&A turns (included in brain history). */
+  isChatTurn?: boolean;
 }
-
-const SUGGESTIONS_BY_PHASE = {
-  capture: ["Jane Doe", "jane@example.com", "+91 98765 43210", "Acme Inc"],
-  chat: [
-    "What's your return policy?",
-    "How long does shipping take?",
-    "What is the meaning of life?",
-    "How can I track my order?",
-  ],
-} as const;
 
 const INACTIVITY_FOLLOWUP_MS = 120_000;
 
@@ -62,7 +46,6 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
-  const [status, setStatus] = useState<string>("");
   const [captureState, setCaptureState] = useState<CaptureState>(INITIAL_STATE);
   const [lead, setLead] = useState<Lead | null>(null);
   const [contactStatus, setContactStatus] = useState<
@@ -72,8 +55,10 @@ export default function Home() {
     phone: string;
     email: string;
   } | null>(null);
-  const [trace, setTrace] = useState<GraphTrace | null>(null);
-  const [showTrace, setShowTrace] = useState(true);
+
+  // Internal accumulator for brain chunks — NOT rendered directly.
+  // The user only sees the final refined answer after the `done` event.
+  const chunksRef = useRef<string>("");
 
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -146,21 +131,30 @@ export default function Home() {
   async function send(text: string) {
     if (!text.trim() || streaming) return;
 
-    const userMsg: Message = { role: "user", content: text };
+    const userMsg: Message = {
+      role: "user",
+      content: text,
+      isChatTurn: captureState.status === "complete",
+    };
     setMessages((m) => [...m, userMsg]);
     setInput("");
     setStreaming(true);
-    setStatus(captureState.status === "capturing" ? "…" : "Thinking…");
-    setTrace(null);
+    chunksRef.current = "";
     cancelInactivityFollowup();
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
-    const history = messages.map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
+    // Only send chat-phase Q&A turns as history to the brain.
+    // Capture-phase exchanges (greeting, name, email, phone, company)
+    // are excluded so the brain isn't confused about what the user's
+    // "first question" was.
+    const history = messages
+      .filter((m) => m.isChatTurn)
+      .map((m) => ({
+        role: m.role,
+        content: m.content,
+      }));
 
     try {
       const res = await fetch("/api/chat", {
@@ -185,7 +179,10 @@ export default function Home() {
 
       const ensureAssistantPlaceholder = () => {
         if (placeholderAdded) return;
-        setMessages((m) => [...m, { role: "assistant", content: "" }]);
+        setMessages((m) => [
+          ...m,
+          { role: "assistant", content: "", isChatTurn: captureState.status === "complete" },
+        ]);
         placeholderAdded = true;
       };
 
@@ -209,7 +206,16 @@ export default function Home() {
         }
       }
     } catch (err) {
-      setStatus(`Error: ${(err as Error).message}`);
+      // Show the error as an assistant message so the user sees it
+      setMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          content: `⚠️ ${(err as Error).message}`,
+          source: "fallback",
+          isFallback: true,
+        },
+      ]);
     } finally {
       setStreaming(false);
       abortRef.current = null;
@@ -222,10 +228,11 @@ export default function Home() {
   ) {
     switch (data.type) {
       case "log":
-        // Debug logs are hidden in the UI; they appear in the trace panel summaries
+        // Debug logs are hidden in the UI
         break;
 
       case "bot":
+        // Capture-phase bot messages — show immediately
         ensureAssistantPlaceholder();
         setMessages((m) =>
           m.map((msg, i) =>
@@ -260,72 +267,32 @@ export default function Home() {
       case "contact-saved":
         if (data.ok) {
           setContactStatus("saved");
-          setStatus(
-            data.action === "created"
-              ? "Contact created ✓"
-              : data.action === "updated"
-                ? "Contact updated ✓"
-                : "Contact saved ✓",
-          );
         } else {
           setContactStatus("failed");
-          setStatus(
-            `Contact save failed: ${data.error ?? data.reason ?? "unknown"}`,
-          );
         }
         break;
 
       case "remarks-saved":
-        if (data.ok) {
-          setStatus((s) => `${s.replace(/ · updated.*$/i, "")} · updated ✓`);
-        }
+        // Hidden in the clean UI
         break;
 
       case "source":
-        setStatus(
-          data.source === "rag"
-            ? "Searching knowledge base…"
-            : data.source === "llm"
-              ? "Thinking…"
-              : data.source === "fallback"
-                ? "Handing off…"
-                : `Source: ${data.source}`,
-        );
-        break;
-
       case "citations":
-        setMessages((m) =>
-          m.map((msg, i) =>
-            i === m.length - 1 ? { ...msg, citations: data.citations } : msg,
-          ),
-        );
+      case "diagnostics":
+        // Hidden in the clean UI — the user only sees the final answer
         break;
 
       case "chunk":
+        // ── Fix #3: Do NOT render streaming chunks to the user. ──
+        // Accumulate internally; the placeholder bubble stays empty
+        // (showing "…") until the final `done` event arrives with the
+        // refined answer.
         ensureAssistantPlaceholder();
-        setMessages((m) =>
-          m.map((msg, i) =>
-            i === m.length - 1
-              ? { ...msg, content: msg.content + data.text }
-              : msg,
-          ),
-        );
-        setStatus("Streaming…");
+        chunksRef.current += data.text;
         break;
 
       case "reducer":
-        setMessages((m) =>
-          m.map((msg, i) =>
-            i === m.length - 1
-              ? {
-                  ...msg,
-                  judgeVerdict: data.verdict,
-                  judgeReason: data.reason,
-                }
-              : msg,
-          ),
-        );
-        setStatus(data.verdict === "good" ? "✓ Ready" : "Handing off…");
+        // Hidden in the clean UI
         break;
 
       case "fallback":
@@ -339,6 +306,8 @@ export default function Home() {
         break;
 
       case "done":
+        // ── The ONLY time the chat-phase answer becomes visible. ──
+        // Replace the placeholder with the final refined answer.
         setMessages((m) =>
           m.map((msg, i) =>
             i === m.length - 1
@@ -346,22 +315,18 @@ export default function Home() {
                   ...msg,
                   content: data.answer ?? "",
                   source: (data.source ?? "unknown") as Source,
-                  elapsedMs: data.elapsedMs,
                   isFallback: !!data.isFallback,
+                  isChatTurn: !data.isFallback, // mark as a real Q&A turn for history
                 }
               : msg,
           ),
         );
-        setStatus(data.isFallback ? "Connected to our team" : "Done");
         if (!data.isFallback) {
           startInactivityFollowup();
         }
         break;
 
       case "contact-updated":
-        setStatus((s) =>
-          `${s.replace(/ · updated.*$/i, "")} · ${data.field} updated ✓`,
-        );
         if (data.field === "company") {
           setLead((prev) =>
             prev ? { ...prev, company: data.value as string } : prev,
@@ -370,225 +335,141 @@ export default function Home() {
         break;
 
       case "trace":
-        setTrace(data.trace as GraphTrace);
+        // Trace panel removed from the clean UI
         break;
 
       case "error":
-        setStatus(`Error: ${data.message}`);
+        setMessages((m) => [
+          ...m,
+          {
+            role: "assistant",
+            content: `⚠️ ${data.message}`,
+            source: "fallback",
+            isFallback: true,
+          },
+        ]);
         break;
     }
   }
 
   const isCapturePhase = captureState.status === "capturing";
-  const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
-  const lastIsFallback = !!lastAssistant?.isFallback;
-  const showSuggestions = !isCapturePhase && !lastIsFallback;
-  const suggestions = isCapturePhase
-    ? SUGGESTIONS_BY_PHASE.capture
-    : SUGGESTIONS_BY_PHASE.chat;
 
   function reset() {
     setMessages([]);
     setCaptureState(INITIAL_STATE);
     setLead(null);
     setContactStatus(null);
-    setStatus("");
-    setTrace(null);
+    chunksRef.current = "";
     cancelInactivityFollowup();
-    // Re-seed the initial greeting
     setTimeout(() => {
       setMessages([{ role: "assistant", content: INITIAL_STATE.prompt! }]);
     }, 0);
   }
 
   return (
-    <main className="flex min-h-screen flex-col bg-gradient-to-b from-zinc-50 to-zinc-100 text-zinc-900 dark:from-zinc-950 dark:to-zinc-900 dark:text-zinc-50">
-      <header className="border-b border-zinc-200 bg-white/80 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/80">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
+    <main className="flex min-h-screen flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-50">
+      <div className="mx-auto flex h-screen w-full max-w-2xl flex-col">
+        {/* ─── Minimal header ─── */}
+        <header className="flex shrink-0 items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
           <div>
-            <h1 className="text-lg font-semibold">GEM Customer Chatbot</h1>
-            <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              LangGraph live conversion · LG1 capture → LG2 chat brain + GLM-5.1
-              reducer
-            </p>
+            <h1 className="text-base font-semibold">GEM Customer Chatbot</h1>
+            {lead && (
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                {lead.name}
+                {lead.email && ` · ${lead.email}`}
+                {contactStatus === "saving" && " · saving…"}
+                {contactStatus === "saved" && " · saved"}
+              </p>
+            )}
+            {!lead && (
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                {isCapturePhase
+                  ? `Lead capture · ${captureState.current}`
+                  : "Ask me anything"}
+              </p>
+            )}
           </div>
-          <div className="flex items-center gap-2">
+          <button
+            onClick={reset}
+            className="rounded-md px-2 py-1 text-xs text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
+          >
+            Reset
+          </button>
+        </header>
+
+        {/* ─── Messages ─── */}
+        <div
+          ref={scrollRef}
+          className="flex-1 overflow-y-auto"
+          style={{ scrollbarWidth: "thin" }}
+        >
+          <div className="space-y-4 p-4">
+            {messages.map((msg, i) => (
+              <Bubble key={i} msg={msg} streaming={streaming} />
+            ))}
+            {streaming && (
+              <div className="flex justify-start">
+                <div className="max-w-[85%] rounded-2xl bg-zinc-100 px-4 py-2 text-sm text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500">
+                  {isCapturePhase ? "…" : "Thinking…"}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ─── Input ─── */}
+        <div className="shrink-0 border-t border-zinc-200 p-4 dark:border-zinc-800">
+          <div className="flex gap-2">
+            <Input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  send(input);
+                }
+              }}
+              placeholder={
+                isCapturePhase ? "Type your reply…" : "Ask a question…"
+              }
+              disabled={streaming}
+              className="flex-1"
+            />
             <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowTrace((v) => !v)}
-              className="gap-1.5 text-xs"
+              onClick={() => send(input)}
+              disabled={!input.trim() || streaming}
+              size="icon"
             >
-              {showTrace ? (
-                <PanelRightClose className="h-4 w-4" />
-              ) : (
-                <PanelRightOpen className="h-4 w-4" />
-              )}
-              {showTrace ? "Hide trace" : "Show trace"}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={reset}
-              className="gap-1.5 text-xs"
-            >
-              <RotateCcw className="h-4 w-4" />
-              Reset
+              <Send className="h-4 w-4" />
             </Button>
           </div>
         </div>
-      </header>
-
-      <div className="mx-auto flex w-full max-w-7xl flex-1 gap-4 px-4 py-4">
-        {/* ─── Chat panel ─── */}
-        <section
-          className={
-            "flex flex-col rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900 " +
-            (showTrace ? "flex-1" : "flex-1")
-          }
-        >
-          {/* Status bar */}
-          <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-2 dark:border-zinc-800">
-            <div className="text-xs text-zinc-500 dark:text-zinc-400">
-              {isCapturePhase ? (
-                <>
-                  <Badge
-                    variant="outline"
-                    className="mr-2 border-purple-300 bg-purple-50 text-purple-700 dark:border-purple-800 dark:bg-purple-950/50 dark:text-purple-300"
-                  >
-                    LG1 · LeadCaptureGraph
-                  </Badge>
-                  collecting:{" "}
-                  <code className="text-[10px]">{captureState.current}</code>
-                </>
-              ) : (
-                <>
-                  <Badge
-                    variant="outline"
-                    className="mr-2 border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300"
-                  >
-                    LG2 · ChatGraph
-                  </Badge>
-                  <span className="font-medium text-zinc-700 dark:text-zinc-300">
-                    {lead?.name ?? "Chat"}
-                  </span>
-                  {lead?.email && (
-                    <span className="ml-2 text-zinc-400">· {lead.email}</span>
-                  )}
-                  {contactStatus === "saving" && (
-                    <span className="ml-2 text-amber-600">
-                      · saving contact…
-                    </span>
-                  )}
-                  {contactStatus === "saved" && (
-                    <span className="ml-2 text-green-600">
-                      · contact saved ✓
-                    </span>
-                  )}
-                  {contactStatus === "failed" && (
-                    <span className="ml-2 text-red-500">· save failed</span>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* Messages */}
-          <div
-            ref={scrollRef}
-            className="flex-1 overflow-y-auto"
-            style={{ scrollbarWidth: "thin" }}
-          >
-            <div className="space-y-4 p-4">
-              {messages.map((msg, i) => (
-                <Bubble key={i} msg={msg} />
-              ))}
-            </div>
-          </div>
-
-          {/* Status line */}
-          {status && (
-            <div className="border-t border-zinc-200 bg-zinc-50 px-4 py-2 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400">
-              {status}
-            </div>
-          )}
-
-          {/* Input */}
-          <div className="border-t border-zinc-200 px-4 py-3 dark:border-zinc-800">
-            {showSuggestions && (
-              <div className="mb-2 flex flex-wrap gap-2">
-                {suggestions.map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => send(s)}
-                    disabled={streaming}
-                    className="rounded-full bg-zinc-100 px-3 py-1 text-xs text-zinc-700 hover:bg-zinc-200 disabled:opacity-50 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            )}
-            {!showSuggestions && (
-              <div className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
-                Or type your question below to keep chatting.
-              </div>
-            )}
-            <div className="flex gap-2">
-              <Input
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    send(input);
-                  }
-                }}
-                placeholder={
-                  isCapturePhase ? "Type your reply…" : "Ask a question…"
-                }
-                disabled={streaming}
-                className="flex-1"
-              />
-              <Button
-                onClick={() => send(input)}
-                disabled={!input.trim() || streaming}
-                size="icon"
-              >
-                <Send className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-        </section>
-
-        {/* ─── Trace panel ─── */}
-        {showTrace && (
-          <aside className="hidden w-[380px] shrink-0 md:block">
-            <TracePanel trace={trace} isStreaming={streaming} />
-          </aside>
-        )}
       </div>
-
-      {/* Mobile trace panel — shown below chat on small screens */}
-      {showTrace && (
-        <aside className="border-t border-zinc-200 px-4 pb-4 dark:border-zinc-800 md:hidden">
-          <div className="h-64">
-            <TracePanel trace={trace} isStreaming={streaming} />
-          </div>
-        </aside>
-      )}
-
-      <footer className="mt-auto border-t border-zinc-200 bg-white/50 px-4 py-2 text-center text-xs text-zinc-400 dark:border-zinc-800 dark:bg-zinc-950/50 dark:text-zinc-500">
-        LeadCaptureGraph (LG1) · ChatGraph (LG2) · No HITL · No checkpointer ·
-        No time-travel
-      </footer>
     </main>
   );
 }
 
-function Bubble({ msg }: { msg: Message }) {
+function Bubble({
+  msg,
+  streaming,
+}: {
+  msg: Message;
+  streaming: boolean;
+}) {
   const isUser = msg.role === "user";
   const isFallback = !!msg.isFallback;
+
+  // Hide the placeholder assistant bubble if it's empty and we're still
+  // streaming (the "Thinking…" indicator handles that case instead).
+  if (
+    !isUser &&
+    msg.content === "" &&
+    streaming &&
+    !msg.isFallback
+  ) {
+    return null;
+  }
+
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
@@ -601,38 +482,9 @@ function Bubble({ msg }: { msg: Message }) {
               : "bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-50")
         }
       >
-        {!isUser && (
-          <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wide opacity-60">
-            {msg.source === "fallback" ? (
-              <>
-                <Phone className="h-3 w-3" /> Handoff to team
-              </>
-            ) : msg.source === "rag" ? (
-              "📚 Knowledge base"
-            ) : msg.source === "llm" ? (
-              "💬 Language model"
-            ) : (
-              "Assistant"
-            )}
-            {msg.elapsedMs != null && ` · ${(msg.elapsedMs / 1000).toFixed(1)}s`}
-          </div>
-        )}
         <div className="whitespace-pre-wrap break-words text-sm">
           {msg.content || "…"}
         </div>
-        {msg.citations && msg.citations.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1 border-t border-zinc-300 pt-2 dark:border-zinc-600">
-            {msg.citations.map((c, i) => (
-              <span
-                key={i}
-                className="rounded bg-white/30 px-2 py-0.5 text-[10px] dark:bg-zinc-700"
-                title={`Score: ${c.score.toFixed(3)}`}
-              >
-                [{i + 1}] {c.title || c.id}
-              </span>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );
