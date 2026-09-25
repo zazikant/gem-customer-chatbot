@@ -279,32 +279,44 @@ function regexStripFiller(text: string): string {
 
 /**
  * Deterministic post-processing: remove any line or trailing clause
- * that references the knowledge base / notes / documents / library.
- * This is a SAFETY NET — runs even on the LLM's "good" output so
- * nothing leaks through to the end user.
+ * that references the knowledge base / notes / documents / library
+ * as a SOURCE (e.g. "Your notes contain no leg exercises"). This is
+ * a SAFETY NET — runs even on the LLM's "good" output so nothing
+ * leaks through to the end user.
  *
- * Removes:
+ * What we REMOVE (source-referencing — tells the user about the KB):
  *   - Whole lines starting with "Your notes", "Your documents",
- *     "Your library", "Your saved", "Based on your", "According to",
- *     "Looking at your", "Note:", "Note that".
- *   - Trailing sentences (after a period) containing those phrases.
+ *     "Your library", "Based on your", "According to", etc.
+ *   - Trailing sentences containing those phrases.
  *   - "[Document: …]" / "[1]" / "[2]" style citations.
+ *
+ * What we KEEP (content-referencing — describes the user's actual stuff):
+ *   - "Your saved chest routines (Instagram reels)" — this is about
+ *     the user's actual saved content, not about the knowledge base.
+ *   - "Your exercise library" when it refers to the user's collection.
+ *
+ * The distinction: "Your notes contain no X" is about the KB's gaps
+ * (remove). "Your saved chest routines" is about the user's content
+ * (keep).
  */
 function stripSourceReferences(text: string): string {
   // 1. Remove [Document: ...], [1], [2] etc.
   let out = text.replace(/\[(?:Document:\s*)?[^\]]+\]/g, "");
 
-  // 2. Remove whole lines that are clearly source-referencing.
-  const lineBanRe = /^\s*(?:your\s+(?:notes?|documents?|library|saved|exercise library)|based on your|according to (?:the |your )|looking at your|note\s*:|note that)\b.*$/im;
+  // 2. Remove whole lines that are clearly source-referencing
+  //    (talking about the KB itself, not the user's content).
+  const lineBanRe = /^\s*(?:your\s+(?:notes?|documents?)|based on your|according to (?:the |your )|looking at your|note\s*:|note that)\b.*$/im;
   out = out
     .split("\n")
     .filter((line) => !lineBanRe.test(line))
     .join("\n");
 
   // 3. Remove trailing sentences (separated by . or ; or —) that
-  //    reference notes/documents/library. Catches inline leaks like
-  //    "...A common approach is Push/Pull alternated 3–4x/week, adding a leg day. Your notes contain no leg exercises, no sets/reps schemes, and no training frequency, so exact numbers can't be given."
-  const sentenceBanRe = /(?:[.;—]\s*|^\s*)(?:your\s+(?:notes?|documents?|library|saved|exercise library)|the\s+(?:notes?|documents?|library)\s+(?:contain|show|include|lack|have|mention))\b[^.]*\.?/gi;
+  //    reference notes/documents as a source. Catches inline leaks like
+  //    "...adding a leg day. Your notes contain no leg exercises, no
+  //    sets/reps schemes, and no training frequency, so exact numbers
+  //    can't be given."
+  const sentenceBanRe = /(?:[.;—]\s*|^\s*)(?:your\s+(?:notes?|documents?)|the\s+(?:notes?|documents?)\s+(?:contain|show|include|lack|have|mention))\b[^.]*\.?/gi;
   out = out.replace(sentenceBanRe, "");
 
   // 4. Clean up: collapse 3+ newlines to 2, trim trailing whitespace per line.
