@@ -45,20 +45,34 @@ export function formatIstTime(d: Date = new Date()): string {
   });
 }
 
+/** Optional client context appended to the remarks header line. */
+export interface RemarkContext {
+  /** Client IP address (resolved server-side from request headers). */
+  ip?: string;
+  /** Device type detected client-side: "desktop" | "mobile" | "tablet" (+ OS). */
+  device?: string;
+}
+
 export function renderRemarks(
   messages: Array<{ role: "user" | "assistant"; content: string; source?: string }>,
   date: Date = new Date(),
+  context?: RemarkContext,
 ): string {
   const day = formatIstDate(date);
-  const lines: string[] = [`[${day}] Conversation captured via GEM chatbot`];
+  // Build the header line, appending IP + device if provided.
+  // Example: "[2026-09-25] Conversation captured via GEM chatbot (ip: 1.2.3.4, device: desktop/macOS)"
+  const ctxParts: string[] = [];
+  if (context?.ip) ctxParts.push(`ip: ${context.ip}`);
+  if (context?.device) ctxParts.push(`device: ${context.device}`);
+  const ctxSuffix = ctxParts.length > 0 ? ` (${ctxParts.join(", ")})` : "";
+  const lines: string[] = [
+    `[${day}] Conversation captured via GEM chatbot${ctxSuffix}`,
+  ];
   for (const m of messages) {
     const time = formatIstTime(date);
     const tag = m.source === "fallback" ? "bot (handoff)" : m.role;
     // Preserve the full content verbatim — do NOT trim or collapse whitespace.
-    // Previous versions sliced to 500 chars and replaced \s+ with a single
-    // space, which mangled multi-line answers and lost the tail of long
-    // responses. The remarks column is a TEXT field in Supabase and can
-    // hold arbitrarily long strings.
+    // The remarks column is a TEXT field in Supabase and can hold full content.
     const content = m.content.trim();
     // Indent continuation lines so multi-line content stays readable
     // inside the per-message remark block.
@@ -137,8 +151,9 @@ export async function findContactByEmail(
 export async function saveContactWithConversation(
   lead: Lead,
   messages: Array<{ role: "user" | "assistant"; content: string; source?: string }>,
+  context?: RemarkContext,
 ): Promise<ContactWriteResult> {
-  const newBlock = renderRemarks(messages);
+  const newBlock = renderRemarks(messages, new Date(), context);
 
   let existing: Record<string, unknown> | null = null;
   try {

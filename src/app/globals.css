@@ -120,5 +120,9 @@
   body {
     @apply bg-background text-foreground;
     height: 100%;
+    margin: 0;
+    /* Prevent the page itself from scrolling — only the messages
+       area scrolls internally. 100% chains from html → body → main. */
+    overflow: hidden;
   }
 }

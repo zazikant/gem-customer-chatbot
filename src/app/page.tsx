@@ -165,6 +165,7 @@ export default function Home() {
           history,
           captureState,
           lead: lead ?? undefined,
+          device: detectDevice(),
         }),
         signal: ctrl.signal,
       });
@@ -367,7 +368,18 @@ export default function Home() {
   }
 
   return (
-    <main className="flex h-screen flex-col overflow-hidden bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-50">
+    <main
+      className="flex flex-col overflow-hidden bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-50"
+      style={{
+        // dvh = dynamic viewport height — adjusts to browser chrome
+        // (address bar, toolbar). Falls back through svh → 100vh so
+        // older browsers still get a full-height layout. This is the
+        // fix for the input box being pushed below the fold on first
+        // load — 100vh alone includes the address bar on mobile and
+        // some desktop configs, so the input ended up off-screen.
+        height: "100dvh",
+      }}
+    >
       <div className="mx-auto flex h-full w-full max-w-2xl flex-col">
         {/* ─── Minimal header ─── */}
         <header className="flex shrink-0 items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
@@ -488,4 +500,26 @@ function Bubble({
       </div>
     </div>
   );
+}
+
+/**
+ * Detect the device type + OS from the browser's userAgent + screen size.
+ * Returns a compact string like "desktop/macOS", "mobile/iOS", or
+ * "tablet/Android". Used in the remarks header so the team can see at
+ * a glance what device the lead was on.
+ */
+function detectDevice(): string {
+  if (typeof navigator === "undefined") return "unknown";
+  const ua = navigator.userAgent;
+  const isMobile = /Mobi|Android|iPhone/i.test(ua);
+  const isTablet = /iPad|Tablet|Silk/i.test(ua) ||
+    (/Android/i.test(ua) && !/Mobi/i.test(ua));
+  let os = "unknown";
+  if (/iPhone|iPad|iPod/i.test(ua)) os = "iOS";
+  else if (/Mac OS X/i.test(ua)) os = "macOS";
+  else if (/Windows NT/i.test(ua)) os = "Windows";
+  else if (/Android/i.test(ua)) os = "Android";
+  else if (/Linux/i.test(ua)) os = "Linux";
+  const kind = isTablet ? "tablet" : isMobile ? "mobile" : "desktop";
+  return `${kind}/${os}`;
 }

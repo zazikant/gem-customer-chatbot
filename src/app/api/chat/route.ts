@@ -3,21 +3,14 @@
  * LeadCaptureGraph (LG1) or ChatGraph (LG2) based on captureState.status.
  *
  * Phase 1 (captureState.status != "complete") → LeadCaptureGraph
- *   validate_input → update_partial → complete_lead → generate_bot_message
- *                  ↘ handle_retry  ↗
- *
  * Phase 2 (captureState.status == "complete") → ChatGraph
- *   call_brain → refine_answer → decide_verdict
- *     → emit_good   → persist_turn → detect_late_company → END
- *     → emit_fallback ↗
  *
- * Response: text/event-stream. Events:
- *   capture, contact-saved, chat, bot, source, citations, diagnostics,
- *   chunk, reducer, fallback, done, remarks-saved, contact-updated,
- *   log, trace, error
- *
- * The `trace` event fires at the end and carries the full LangGraph
- * execution trace (nodes + tools + timings) for the UI's debug panel.
+ * Client context (IP + device) is resolved here:
+ *   • IP — extracted from standard forwarded-for headers
+ *   • device — sent by the client in the request body (detected
+ *     client-side from userAgent + screen size)
+ * Both are passed into the graphs so they end up in the remarks
+ * header line: "[date] Conversation captured via GEM chatbot (ip: …, device: …)"
  */
 import { runLeadCaptureGraph } from "@/lib/graphs/lead-capture-graph";
 import { runChatGraph } from "@/lib/graphs/chat-graph";
@@ -26,6 +19,7 @@ import {
   type CaptureState,
   type Lead,
 } from "@/lib/lead-capture";
+import type { RemarkContext } from "@/lib/contacts";
 
 export const runtime = "nodejs";
 export const maxDuration = 150;
@@ -35,6 +29,27 @@ interface ChatRequest {
   history?: Array<{ role: "user" | "assistant"; content: string }>;
   captureState?: CaptureState;
   lead?: Lead;
+  /** Client-detected device string, e.g. "desktop/macOS" or "mobile/iOS". */
+  device?: string;
+}
+
+/**
+ * Resolve the client's IP from standard proxy headers. On Vercel,
+ * `x-forwarded-for` is set by the edge; `x-real-ip` is a fallback
+ * some CDNs set. Returns the first valid IP or undefined.
+ */
+function resolveClientIp(req: Request): string | undefined {
+  const headers = req.headers;
+  const xff = headers.get("x-forwarded-for");
+  if (xff) {
+    // x-forwarded-for is a comma-separated list; the first entry is
+    // the original client IP.
+    const first = xff.split(",")[0]?.trim();
+    if (first && first.length > 0) return first;
+  }
+  const xRealIp = headers.get("x-real-ip");
+  if (xRealIp && xRealIp.trim().length > 0) return xRealIp.trim();
+  return undefined;
 }
 
 export async function POST(req: Request) {
@@ -57,6 +72,12 @@ export async function POST(req: Request) {
 
   const captureState: CaptureState = body.captureState ?? INITIAL_STATE;
   const lead = body.lead;
+
+  // Build the remark context: IP from headers, device from body.
+  const context: RemarkContext = {
+    ip: resolveClientIp(req),
+    device: body.device?.trim() || undefined,
+  };
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -90,10 +111,10 @@ export async function POST(req: Request) {
             captureState,
             userMessage: message,
             emit,
+            context,
           });
 
-          // If lead was completed, fire-and-forget the initial contact save
-          // (mirrors the source repo behavior).
+          // If lead was completed, fire-and-forget the initial contact save.
           if (result.completedLead) {
             emit("log", { line: `[graph] lead complete — saving contact` });
             const { saveContactWithConversation } = await import("@/lib/contacts");
@@ -107,7 +128,11 @@ export async function POST(req: Request) {
                 content: `name=${result.completedLead.name}; email=${result.completedLead.email}; phone=${result.completedLead.phone}; company=${result.completedLead.company ?? "(none)"}`,
               },
             ];
-            saveContactWithConversation(result.completedLead, initialTranscript)
+            saveContactWithConversation(
+              result.completedLead,
+              initialTranscript,
+              context,
+            )
               .then((r) => emit("contact-saved", r))
               .catch((err) =>
                 emit("log", { line: `[contact] save failed: ${err.message}` }),
@@ -119,10 +144,7 @@ export async function POST(req: Request) {
           // ── Phase 2: ChatGraph ──
           emit("log", { line: `[graph] invoke ChatGraph` });
           // Defensively filter the history the client sends: only keep
-          // real chat-phase Q&A turns. The capture-phase exchanges
-          // (greeting, "What's your name?", the name/email/phone/company
-          // values) would confuse the brain about what the user's "first
-          // question" actually was.
+          // real chat-phase Q&A turns.
           const chatHistory = (body.history ?? [])
             .filter((h) => h && h.role && h.content)
             .map((h) => ({
@@ -134,6 +156,7 @@ export async function POST(req: Request) {
             history: chatHistory,
             lead: lead ?? undefined,
             emit,
+            context,
           });
           emit("trace", { trace: result.trace });
         }

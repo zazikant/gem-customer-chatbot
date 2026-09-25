@@ -26,6 +26,7 @@ import {
   saveContactWithConversation,
   updateContactField,
   type ContactWriteResult,
+  type RemarkContext,
 } from "@/lib/contacts";
 import { getConfig } from "@/lib/config";
 import type { Lead } from "@/lib/lead-capture";
@@ -45,6 +46,8 @@ const LG2State = Annotation.Root({
   history: Annotation<Array<{ role: "user" | "assistant" | "system"; content: string }>>,
   lead: Annotation<Lead | undefined>,
   emit: Annotation<(type: string, payload: Record<string, unknown>) => void>,
+  // Client context (IP + device) for the remarks header:
+  context: Annotation<RemarkContext | undefined>,
   // Internal scratchpad:
   brainResult: Annotation<BrainResult | undefined>,
   refined: Annotation<RefinedAnswer | undefined>,
@@ -299,6 +302,7 @@ const persistTurnNode = traceNode<LG2StateType>(
       saveContactWithConversation(
         { ...state.lead!, capturedAt: state.lead!.capturedAt || 0 },
         transcript,
+        state.context,
       ),
     );
 
@@ -442,6 +446,7 @@ export async function runChatGraph(input: ChatGraphInput): Promise<ChatGraphOutp
     history: input.history,
     lead: input.lead,
     emit: input.emit,
+    context: input.context,
     brainResult: undefined,
     refined: undefined,
     verdict: "no_answer",

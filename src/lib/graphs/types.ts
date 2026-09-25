@@ -116,6 +116,8 @@ export interface ChatGraphInput {
   history: Array<{ role: "user" | "assistant" | "system"; content: string }>;
   lead?: Lead;
   emit: (type: string, payload: Record<string, unknown>) => void;
+  /** Client context (IP + device) appended to the remarks header. */
+  context?: import("@/lib/contacts").RemarkContext;
 }
 
 export interface ChatGraphOutput {
@@ -137,6 +139,8 @@ export interface LeadCaptureGraphInput {
   captureState: CaptureState;
   userMessage: string;
   emit: (type: string, payload: Record<string, unknown>) => void;
+  /** Client context (IP + device) appended to the remarks header. */
+  context?: import("@/lib/contacts").RemarkContext;
 }
 
 export interface LeadCaptureGraphOutput {
