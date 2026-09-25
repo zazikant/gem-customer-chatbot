@@ -33,3 +33,22 @@ Stage Summary:
 - Trace panel renders every node + tool call with timing, giving full visibility into graph execution.
 - Dev server runs cleanly on port 3000 (Next.js 16.1.3 Turbopack). No errors in dev.log.
 - Screenshot saved at /home/z/my-project/download/chatgraph-trace.png.
+
+---
+Task ID: 2
+Agent: main (super-z)
+Task: Fix 5 issues reported by user: (1) don't enforce country code, (2) remarks getting trimmed during capture, (3) user should only see final answer after brain+LLM processing not streaming chunks, (4) clean UI remove unnecessary elements keep only chat window, (5) "what was my first question" gave wrong answer.
+
+Work Log:
+- Fix #1 (phone validation): Changed PHONE_RE from /^\+[\d\s\-()]{6,20}$/ to /^[+]?[\d\s\-()]{6,20}$/ — the leading + is now optional. Updated the error message and the FIELD_PROMPTS.phone to drop the "+91 …" example. Verified: phone "9876543210" (no country code) is now accepted without retry.
+- Fix #2 (remarks trimming): Removed the .replace(/\s+/g, " ").trim().slice(0, 500) from renderRemarks() in contacts.ts. Full content is now preserved verbatim. Multi-line content is indented under the timestamp for readability. The remarks column is TEXT in Supabase and holds full content.
+- Fix #3 (hide streaming chunks): Rewrote the client's chunk event handler to accumulate chunks into a chunksRef instead of rendering them into the bubble. The placeholder assistant bubble stays hidden while streaming; a "Thinking…" indicator shows instead. The final refined answer only becomes visible when the 'done' event arrives. The user never sees the raw brain draft — only the GLM-5.1-processed final answer.
+- Fix #4 (clean UI): Rewrote page.tsx as a single full-screen chat window. Removed: trace panel, TracePanel component import, GraphTrace state, showTrace toggle, header buttons (Hide/Show trace), suggestion chips, SUGGESTIONS_BY_PHASE, status bar, contact-status badges in status bar, footer. Kept: minimal header (title + lead info + Reset button), messages area, input bar. The page is now max-w-2xl centered, h-screen, just chat.
+- Fix #5 (history): Two changes — (a) Client now filters messages to only send chat-phase Q&A turns (isChatTurn flag) as history to the brain, excluding capture-phase exchanges (greeting, name, email, phone, company). (b) The GLM-5.1 reducer now receives the conversation history and its system prompt instructs it to answer meta-questions ("what was my first question?", "what did you just say?") from history when the brain's RAG draft is irrelevant. Updated refineAnswer() signature to accept history, updated the glm_reducer tool schema, updated the ChatGraph refine_answer node to pass state.history. Verified: "What was my first question?" now correctly returns 'Your first question was: "What is langgraph?"' instead of the brain's irrelevant RAG note about a Python app.
+- Ran bun run lint: 0 errors, 0 warnings.
+- Verified all 5 fixes end-to-end with agent-browser: capture with phone "9876543210" (no country code) accepted; "What is langgraph?" showed clean final answer with "Thinking…" indicator (no streaming chunks); "What was my first question?" correctly answered from conversation history.
+- Committed (b5c9c7a) and pushed to GitHub main.
+
+Stage Summary:
+- All 5 issues fixed and verified. Pushed to https://github.com/zazikant/gem-customer-chatbot (main, commit b5c9c7a).
+- The chatbot now: accepts phone numbers without country code, preserves full remarks content, shows only the final refined answer (no streaming chunks), has a clean single-window chat UI, and correctly answers meta-questions about the conversation history.
