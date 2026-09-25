@@ -14,6 +14,7 @@
  */
 
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface Props {
   content: string;
@@ -27,13 +28,18 @@ export function MessageContent({ content, as }: Props) {
   return (
     <div className="markdown-body text-sm leading-relaxed">
       <ReactMarkdown
+        // remark-gfm enables GitHub Flavored Markdown, which includes
+        // autolinking of bare URLs (https://... and www....). Without
+        // this plugin, react-markdown only renders [text](url) Markdown
+        // links and leaves bare URLs as plain text.
+        remarkPlugins={[remarkGfm]}
         components={{
           a: ({ node, ...props }) => (
             <a
               {...props}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-blue-600 underline underline-offset-2 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+              className="text-blue-600 underline underline-offset-2 hover:text-blue-700 break-all dark:text-blue-400 dark:hover:text-blue-300"
             />
           ),
           // Preserve whitespace/newlines for pre-formatted blocks
