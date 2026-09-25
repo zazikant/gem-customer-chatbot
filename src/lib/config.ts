@@ -1,12 +1,14 @@
 /**
  * GEM Customer Chatbot — configuration.
  *
- * All values come from environment variables (.env.local in dev,
- * Vercel Environment Variables in prod). `getConfig()` is a lazy
- * singleton — it reads env vars on first call and caches the result.
+ * Business contact details (phone, email) are HARDCODED defaults —
+ * not env vars — so the app works out of the box. They can still be
+ * overridden via env vars if needed.
  *
- * Throws an aggregated error if any required var is missing.
+ * Only the service credentials (OPENCODE_API_KEY, CHAT_BRAIN_URL,
+ * CSV_CHAT_BASE) must come from env vars.
  */
+
 export interface BusinessContact {
   phone: string; // display: "+91 7777016824"
   phoneRaw: string; // tel: link: "+917777016824"
@@ -22,6 +24,13 @@ export interface RequiredConfig {
   inactivityMs: number;
 }
 
+// ─── Hardcoded business contact (not env vars) ────────────────
+const DEFAULT_BUSINESS: BusinessContact = {
+  phone: "+91 7777016824",
+  phoneRaw: "+917777016824",
+  email: "business@gemengserv.com",
+};
+
 let cached: RequiredConfig | null = null;
 
 export function getConfig(): RequiredConfig {
@@ -34,12 +43,10 @@ export function getConfig(): RequiredConfig {
     return v?.trim() ?? "";
   };
 
+  // Only these three are required env vars.
   const opencodeApiKey = need("OPENCODE_API_KEY");
   const chatBrainUrl = need("CHAT_BRAIN_URL");
   const csvChatBase = need("CSV_CHAT_BASE");
-  const businessPhone = need("BUSINESS_PHONE");
-  const businessPhoneRaw = need("BUSINESS_PHONE_RAW");
-  const businessEmail = need("BUSINESS_EMAIL");
 
   if (errors.length > 0) {
     throw new Error(
@@ -49,16 +56,19 @@ export function getConfig(): RequiredConfig {
     );
   }
 
+  // Business contact: hardcoded defaults, overridable via env vars.
+  const business: BusinessContact = {
+    phone: process.env.BUSINESS_PHONE?.trim() || DEFAULT_BUSINESS.phone,
+    phoneRaw: process.env.BUSINESS_PHONE_RAW?.trim() || DEFAULT_BUSINESS.phoneRaw,
+    email: process.env.BUSINESS_EMAIL?.trim() || DEFAULT_BUSINESS.email,
+  };
+
   cached = {
     opencodeApiKey,
     opencodeModel: process.env.OPENCODE_MODEL?.trim() || "glm-5.1",
     chatBrainUrl,
     csvChatBase: csvChatBase.replace(/\/+$/, ""),
-    business: {
-      phone: businessPhone,
-      phoneRaw: businessPhoneRaw,
-      email: businessEmail,
-    },
+    business,
     inactivityMs: Number(process.env.CHAT_INACTIVITY_MS ?? 120_000),
   };
   return cached;

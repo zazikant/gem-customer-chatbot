@@ -367,8 +367,8 @@ export default function Home() {
   }
 
   return (
-    <main className="flex min-h-screen flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-50">
-      <div className="mx-auto flex h-screen w-full max-w-2xl flex-col">
+    <main className="flex h-screen flex-col overflow-hidden bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-50">
+      <div className="mx-auto flex h-full w-full max-w-2xl flex-col">
         {/* ─── Minimal header ─── */}
         <header className="flex shrink-0 items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
           <div>
@@ -400,7 +400,7 @@ export default function Home() {
         {/* ─── Messages ─── */}
         <div
           ref={scrollRef}
-          className="flex-1 overflow-y-auto"
+          className="min-h-0 flex-1 overflow-y-auto"
           style={{ scrollbarWidth: "thin" }}
         >
           <div className="space-y-4 p-4">
