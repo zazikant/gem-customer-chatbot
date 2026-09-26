@@ -122,6 +122,7 @@ export async function POST(req: Request) {
             // summary instead of a transcript.
             const leadSummary = {
               outcome: "lead captured",
+              question: "",
               fields: {
                 Outcome: "lead captured",
                 "Lead stage": "captured",

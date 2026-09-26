@@ -5,8 +5,9 @@
  *
  * - Assistant messages: rendered as Markdown (react-markdown) so that
  *   ## headers, **bold**, lists, [text](url) links, and bare URLs are
- *   all properly formatted and clickable. This is the "clean clickable
- *   links" fix — previously URLs were plain text.
+ *   all properly formatted and clickable. A preprocessor adds https://
+ *   to bare domain references (youtu.be/..., youtube.com/...,
+ *   instagram.com/...) so remark-gfm can autolink them.
  * - User messages: rendered as plain text with bare URLs auto-linked
  *   (no Markdown, so the user's literal input is preserved).
  *
@@ -25,13 +26,14 @@ export function MessageContent({ content, as }: Props) {
   if (as === "user") {
     return <span className="whitespace-pre-wrap break-words">{autoLink(content)}</span>;
   }
+  // Preprocess: add https:// to bare domain references so remark-gfm
+  // can autolink them. The brain/reducer sometimes drops the https://
+  // prefix, leaving bare "youtu.be/xxx" or "instagram.com/reel/xxx"
+  // which remark-gfm does NOT autolink by default.
+  const processed = addHttpsToBareDomains(content);
   return (
     <div className="markdown-body text-sm leading-relaxed">
       <ReactMarkdown
-        // remark-gfm enables GitHub Flavored Markdown, which includes
-        // autolinking of bare URLs (https://... and www....). Without
-        // this plugin, react-markdown only renders [text](url) Markdown
-        // links and leaves bare URLs as plain text.
         remarkPlugins={[remarkGfm]}
         components={{
           a: ({ node, ...props }) => (
@@ -42,14 +44,38 @@ export function MessageContent({ content, as }: Props) {
               className="text-blue-600 underline underline-offset-2 hover:text-blue-700 break-all dark:text-blue-400 dark:hover:text-blue-300"
             />
           ),
-          // Preserve whitespace/newlines for pre-formatted blocks
           pre: ({ node, ...props }) => <pre {...props} className="overflow-x-auto" />,
         }}
       >
-        {content}
+        {processed}
       </ReactMarkdown>
     </div>
   );
+}
+
+/**
+ * Add https:// to bare domain references that remark-gfm won't autolink.
+ *
+ * remark-gfm only autolinks URLs starting with http://, https://, or www.
+ * The brain/reducer sometimes produces bare domains like:
+ *   youtu.be/QVaijMZ2mp8
+ *   youtube.com/shorts/3Bv1n7-DN7c
+ *   instagram.com/reel/DdjsyFhvGPt
+ *
+ * This function prepends https:// to those bare domains so they become
+ * clickable links. It does NOT touch URLs that already have a scheme.
+ */
+function addHttpsToBareDomains(text: string): string {
+  // Match bare domains (no preceding scheme) for common video/social sites.
+  // Stops at whitespace, end of line, or trailing punctuation.
+  const bareDomainRe =
+    /(?<![\w:/.-])(youtu\.be\/[^\s<>"']+|youtube\.com\/[^\s<>"']+|instagram\.com\/[^\s<>"']+|youtu\.be\/[^\s<>"']+|x\.com\/[^\s<>"']+|twitter\.com\/[^\s<>"']+|tiktok\.com\/[^\s<>"']+)/gi;
+  return text.replace(bareDomainRe, (match) => {
+    // Strip trailing punctuation that shouldn't be part of the URL
+    const trailing = match.match(/[.,;:!?)\]]+$/);
+    const cleanUrl = trailing ? match.slice(0, -trailing[0].length) : match;
+    return `https://${cleanUrl}${trailing ? trailing[0] : ""}`;
+  });
 }
 
 /**
@@ -57,8 +83,8 @@ export function MessageContent({ content, as }: Props) {
  * elements. Used for user messages (which aren't Markdown-rendered).
  */
 function autoLink(text: string): React.ReactNode[] {
-  // Match http(s)://... or www.... — stop at whitespace or end of line.
-  const urlRe = /(https?:\/\/[^\s<>"']+|www\.[^\s<>"']+)/gi;
+  // Match http(s)://..., www...., or bare video domains (youtu.be/..., etc.)
+  const urlRe = /(https?:\/\/[^\s<>"']+|www\.[^\s<>"']+|youtu\.be\/[^\s<>"']+|youtube\.com\/[^\s<>"']+|instagram\.com\/[^\s<>"']+)/gi;
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -68,7 +94,7 @@ function autoLink(text: string): React.ReactNode[] {
       parts.push(text.slice(lastIndex, match.index));
     }
     const url = match[0];
-    const href = url.startsWith("www.") ? `https://${url}` : url;
+    const href = url.startsWith("http") ? url : `https://${url}`;
     parts.push(
       <a
         key={`link-${key++}`}

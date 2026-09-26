@@ -61,6 +61,8 @@ export interface RemarkContext {
 export interface TurnSummary {
   /** Always present: "answered by chatbot" or "handed off to team" */
   outcome: string;
+  /** The user's actual question — included verbatim at the top of the block */
+  question: string;
   /** AI-derived key-value pairs, e.g. { Intent: "gym_routine", Lead stage: "information_seeking", ... } */
   fields: Record<string, string>;
 }
@@ -70,12 +72,13 @@ export interface TurnSummary {
  *
  * Format:
  *   [2026-09-26] Conversation captured via GEM chatbot (ip: 1.2.3.4, device: desktop/macOS)
+ *     Question: What should be my best gym routine?
  *     Outcome: answered by chatbot
  *     Intent: gym_routine
  *     Lead stage: information_seeking
  *     Status: answered
  *
- * The full answer text is NOT included — only the operational summary.
+ * The full answer text is NOT included — only the user's question + the operational summary.
  */
 export function renderRemarks(
   messages: Array<{ role: "user" | "assistant"; content: string; source?: string }>,
@@ -93,8 +96,12 @@ export function renderRemarks(
   ];
 
   if (summary) {
-    // ── New format: operational summary only, no full transcript ──
-    // Always show Outcome first, then the rest in insertion order.
+    // ── New format: user's question + operational summary ──
+    // Show the user's question first (so the team can see what was
+    // asked without reading the full transcript), then Outcome, then
+    // the rest of the AI-derived key-value pairs in insertion order.
+    const question = summary.question.trim().replace(/\s+/g, " ").slice(0, 300);
+    lines.push(`  Question: ${question}`);
     const ordered: Record<string, string> = { Outcome: summary.outcome };
     for (const [k, v] of Object.entries(summary.fields)) {
       if (k !== "Outcome") ordered[k] = v;

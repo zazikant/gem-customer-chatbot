@@ -308,6 +308,7 @@ const deriveSummaryNode = traceNode<LG2StateType>(
 
     const turnSummary: TurnSummary = {
       outcome: summary.fields["Outcome"] ?? (state.isFallback ? "handed off to team" : "answered by chatbot"),
+      question: state.query,
       fields: summary.fields,
     };
 

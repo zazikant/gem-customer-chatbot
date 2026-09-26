@@ -24,15 +24,25 @@ You are given a conversation turn: the user's question, the chatbot's answer, an
 
 Your job: extract a short operational summary as key-value pairs that describe WHAT HAPPENED in this turn from a business-operations perspective.
 
-Derive the keys YOURSELF based on the conversation. Common keys include (use only the ones that apply — skip irrelevant ones):
+CRITICAL: The keys are NOT a fixed list. Derive them YOURSELF based on what the conversation is about. Different conversations will have different keys. Invent keys that make operational sense for THIS conversation.
 
-- Outcome: always include. "answered by chatbot" if the bot answered, "handed off to team" if it fell back to human contact.
+Examples of keys you might derive (use only the ones that apply — skip irrelevant ones, and add your own):
+
+- Outcome: ALWAYS include. "answered by chatbot" if the bot answered, "handed off to team" if it fell back to human contact.
 - Lead stage: where the customer is in the journey. e.g. "information_seeking", "booking_requested", "pricing_inquiry", "complaint", "follow_up", "resolved".
 - Intent: what the customer wanted. e.g. "appointment_booking", "return_policy", "product_question", "pricing", "technical_support".
 - Service / Product / Topic: the specific subject. e.g. "cleaning", "gym routine", "shipping", "Nike shoes size 10".
 - Status: the current state. e.g. "answered", "awaiting patient confirmation", "unanswered", "needs follow-up".
 - Slots offered: if appointment/booking slots were discussed, list them.
-- Any other operationally useful key the conversation surfaces.
+- Appointment intent: if booking, what kind. e.g. "cleaning", "consultation".
+- Gaps noted: if the answer mentioned missing info. e.g. "missing legs, core, sets/reps".
+- Mood: customer sentiment if discernible. e.g. "neutral", "frustrated", "curious".
+- Any other operationally useful key the conversation surfaces — be creative and specific.
+
+Example outputs:
+{"Outcome":"answered by chatbot","Intent":"appointment_booking","Lead stage":"booking_requested","Service":"cleaning","Appointment intent":"cleaning","Slots offered":"Tuesday 10:00 AM, Wednesday 2:30 PM","Status":"awaiting patient confirmation"}
+{"Outcome":"answered by chatbot","Intent":"product_question","Lead stage":"information_seeking","Service/Topic":"gym routine","Status":"answered","Gaps noted":"missing legs, core, sets/reps"}
+{"Outcome":"handed off to team","Intent":"general_knowledge","Lead stage":"information_seeking","Status":"unanswered","Reason":"out of scope"}
 
 Rules:
 - Output STRICT JSON: {"key1":"value1","key2":"value2",...}
