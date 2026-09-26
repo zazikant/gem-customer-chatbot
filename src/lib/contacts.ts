@@ -181,11 +181,19 @@ async function apiGet(path: string): Promise<{ status: number; data: any }> {
 export async function findContactByEmail(
   email: string,
 ): Promise<Record<string, unknown> | null> {
-  const safe = encodeURIComponent(email.trim().toLowerCase());
-  const { status, data } = await apiGet(`/api/main-contacts?page=1&pageSize=1&q=${safe}`);
+  const target = email.trim().toLowerCase();
+  const safe = encodeURIComponent(target);
+  // Use a larger page size and filter for exact email match — the `q`
+  // parameter is a fuzzy search across all fields, so rows[0] might
+  // be a different contact whose remarks mention this email.
+  const { status, data } = await apiGet(`/api/main-contacts?page=1&pageSize=20&q=${safe}`);
   if (status !== 200) return null;
   const rows: any[] = Array.isArray(data?.rows) ? data.rows : [];
-  return rows[0] ?? null;
+  // Exact email match (case-insensitive)
+  const exact = rows.find(
+    (r) => String(r?.email ?? "").toLowerCase() === target,
+  );
+  return exact ?? rows[0] ?? null;
 }
 
 export async function saveContactWithConversation(
@@ -219,7 +227,7 @@ export async function saveContactWithConversation(
       source: [CHATBOT_SOURCE],
     };
     try {
-      const { status, data } = await apiPost("/api/main-contacts", payload);
+      const { status, data } = await apiPost("/api/main-contacts?merge_arrays=true", payload);
       if (status === 201 || status === 200) {
         return { ok: true, action: "created", row: data };
       }
@@ -263,7 +271,7 @@ export async function saveContactWithConversation(
   if (lead.phone && lead.phone.trim().length > 0) payload.phone = lead.phone.trim();
   if (lead.company && lead.company.trim().length > 0) payload.company = lead.company.trim();
   try {
-    const { status, data } = await apiPut("/api/main-contacts", payload);
+    const { status, data } = await apiPut("/api/main-contacts?merge_arrays=true", payload);
     if (status === 200) {
       return { ok: true, action: "updated", row: data };
     }
