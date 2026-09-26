@@ -103,11 +103,16 @@ sequenceDiagram
             end
         end
 
-        Note over NX,U: Final answer is delivered before contact persistence completes
+        Note over NX,U: Final answer is delivered before summary + persistence
+
+        LG2->>JUDGE: derive_summary [trace: glm_summary]
+        Note over JUDGE: GLM-5.1 derives operational key-value pairs<br/>(Intent, Lead stage, Service, Status, etc.)
+        JUDGE-->>LG2: TurnSummary(outcome, fields)
+        LG2-->>NX: SSE log(summary fields)
 
         alt lead is present
             LG2->>DB: persist_turn [trace: contacts_upsert]
-            Note over DB: Find by email, then insert or merge remarks, tags, and source
+            Note over DB: Find by email, then insert or merge — remarks<br/>contains the operational summary, NOT the full answer text
             DB-->>LG2: contact write result
             LG2-->>NX: SSE remarks-saved
 
@@ -155,14 +160,15 @@ START → validate_input →─→ update_partial →─→ complete_lead → ge
 ### LG2 — ChatGraph
 
 ```
-START → call_brain → refine_answer → decide_verdict →─→ emit_good   ──→ persist_turn → detect_late_company → END
-                       (or jump to emit_fallback       └─(no_answer)─→ emit_fallback ──┘
+START → call_brain → refine_answer → decide_verdict →─→ emit_good   ──→ derive_summary → persist_turn → detect_late_company → END
+                       (or jump to emit_fallback       └─(no_answer)─→ emit_fallback ──→ derive_summary ↗
                         if brain errored with no answer)
 ```
 
-- **4 tools**: `brain_proxy`, `glm_reducer`, `contacts_upsert`, `contacts_update_field` (trace labels — functions called directly from nodes)
+- **5 tools**: `brain_proxy`, `glm_reducer`, `glm_summary`, `contacts_upsert`, `contacts_update_field` (trace labels — functions called directly from nodes)
 - **No HITL / checkpointer / time-travel** — every request runs the graph to completion in one shot
-- 7 nodes: `call_brain`, `refine_answer`, `decide_verdict`, `emit_good`, `emit_fallback`, `persist_turn`, `detect_late_company`
+- 8 nodes: `call_brain`, `refine_answer`, `decide_verdict`, `emit_good`, `emit_fallback`, `derive_summary`, `persist_turn`, `detect_late_company`
+- `derive_summary` calls GLM-5.1 to produce operational key-value pairs (Intent, Lead stage, Service, Status, etc.) that replace the full transcript in the remarks column
 
 ## Live SSE streaming
 

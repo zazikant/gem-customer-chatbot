@@ -118,20 +118,21 @@ export async function POST(req: Request) {
           if (result.completedLead) {
             emit("log", { line: `[graph] lead complete — saving contact` });
             const { saveContactWithConversation } = await import("@/lib/contacts");
-            const initialTranscript = [
-              {
-                role: "assistant" as const,
-                content: "Lead captured via GEM chatbot.",
+            // Initial lead save — no Q&A yet, so use a simple outcome
+            // summary instead of a transcript.
+            const leadSummary = {
+              outcome: "lead captured",
+              fields: {
+                Outcome: "lead captured",
+                "Lead stage": "captured",
+                Status: "awaiting first question",
               },
-              {
-                role: "user" as const,
-                content: `name=${result.completedLead.name}; email=${result.completedLead.email}; phone=${result.completedLead.phone}; company=${result.completedLead.company ?? "(none)"}`,
-              },
-            ];
+            };
             saveContactWithConversation(
               result.completedLead,
-              initialTranscript,
+              [], // no transcript — summary replaces it
               context,
+              leadSummary,
             )
               .then((r) => emit("contact-saved", r))
               .catch((err) =>

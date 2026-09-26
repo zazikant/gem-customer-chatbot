@@ -22,11 +22,13 @@
 import { StateGraph, START, END, Annotation } from "@langchain/langgraph";
 import { callBrain, type BrainResult } from "@/lib/brain-client";
 import { refineAnswer, type RefinedAnswer } from "@/lib/reducer";
+import { deriveSummary, type OperationalSummary } from "@/lib/summarizer";
 import {
   saveContactWithConversation,
   updateContactField,
   type ContactWriteResult,
   type RemarkContext,
+  type TurnSummary,
 } from "@/lib/contacts";
 import { getConfig } from "@/lib/config";
 import type { Lead } from "@/lib/lead-capture";
@@ -52,6 +54,8 @@ const LG2State = Annotation.Root({
   brainResult: Annotation<BrainResult | undefined>,
   refined: Annotation<RefinedAnswer | undefined>,
   verdict: Annotation<"good" | "no_answer">,
+  // Operational summary derived by GLM-5.1 — replaces the full transcript in remarks:
+  summary: Annotation<TurnSummary | undefined>,
   // Output:
   finalAnswer: Annotation<string>,
   source: Annotation<string>,
@@ -277,6 +281,44 @@ const emitFallbackNode = traceNode<LG2StateType>(
   },
 );
 
+// ─── Node: derive_summary [tool: glm_reducer] ─────────────────
+// GLM-5.1 derives operational key-value pairs from the conversation
+// turn. The summary replaces the full transcript in the remarks
+// column so the business team sees what happened, not the full answer.
+
+const deriveSummaryNode = traceNode<LG2StateType>(
+  "derive_summary",
+  async (state) => {
+    const [summary, toolTrace] = await traceTool("glm_summary", () =>
+      deriveSummary(
+        state.query,
+        state.finalAnswer,
+        state.isFallback,
+        state.history,
+      ),
+    );
+
+    const trace = { ...state.trace, tools: [...state.trace.tools, toolTrace] };
+
+    state.emit("log", {
+      line: `[summary] ${Object.entries(summary.fields)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(", ")} (${summary.elapsedMs}ms${summary.usedFallback ? " heuristic" : ""})`,
+    });
+
+    const turnSummary: TurnSummary = {
+      outcome: summary.fields["Outcome"] ?? (state.isFallback ? "handed off to team" : "answered by chatbot"),
+      fields: summary.fields,
+    };
+
+    return {
+      summary: turnSummary,
+      trace,
+      __nodeSummary: `${Object.keys(summary.fields).length} fields (${summary.elapsedMs}ms)`,
+    } as any;
+  },
+);
+
 // ─── Node: persist_turn [tool: contacts_upsert] ───────────────
 
 const persistTurnNode = traceNode<LG2StateType>(
@@ -289,6 +331,9 @@ const persistTurnNode = traceNode<LG2StateType>(
       } as any;
     }
 
+    // The transcript is still passed for the legacy fallback path in
+    // renderRemarks, but when a summary is present it is NOT used —
+    // the summary replaces the full transcript in the remarks column.
     const transcript = [
       { role: "user" as const, content: state.query },
       {
@@ -303,6 +348,7 @@ const persistTurnNode = traceNode<LG2StateType>(
         { ...state.lead!, capturedAt: state.lead!.capturedAt || 0 },
         transcript,
         state.context,
+        state.summary,
       ),
     );
 
@@ -407,6 +453,7 @@ const workflow = new StateGraph(LG2State)
   .addNode("decide_verdict", decideVerdictNode)
   .addNode("emit_good", emitGoodNode)
   .addNode("emit_fallback", emitFallbackNode)
+  .addNode("derive_summary", deriveSummaryNode)
   .addNode("persist_turn", persistTurnNode)
   .addNode("detect_late_company", detectLateCompanyNode)
   .addEdge(START, "call_brain")
@@ -419,8 +466,9 @@ const workflow = new StateGraph(LG2State)
     emit_good: "emit_good",
     emit_fallback: "emit_fallback",
   })
-  .addEdge("emit_good", "persist_turn")
-  .addEdge("emit_fallback", "persist_turn")
+  .addEdge("emit_good", "derive_summary")
+  .addEdge("emit_fallback", "derive_summary")
+  .addEdge("derive_summary", "persist_turn")
   .addEdge("persist_turn", "detect_late_company")
   .addEdge("detect_late_company", END);
 
@@ -450,6 +498,7 @@ export async function runChatGraph(input: ChatGraphInput): Promise<ChatGraphOutp
     brainResult: undefined,
     refined: undefined,
     verdict: "no_answer",
+    summary: undefined,
     finalAnswer: "",
     source: "",
     isFallback: false,

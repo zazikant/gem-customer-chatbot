@@ -53,14 +53,37 @@ export interface RemarkContext {
   device?: string;
 }
 
+/**
+ * Operational summary produced by GLM-5.1 — replaces the full transcript
+ * in the remarks column. The business team sees key-value pairs that
+ * describe what happened, not the full answer text.
+ */
+export interface TurnSummary {
+  /** Always present: "answered by chatbot" or "handed off to team" */
+  outcome: string;
+  /** AI-derived key-value pairs, e.g. { Intent: "gym_routine", Lead stage: "information_seeking", ... } */
+  fields: Record<string, string>;
+}
+
+/**
+ * Render a remarks block for a single conversation turn.
+ *
+ * Format:
+ *   [2026-09-26] Conversation captured via GEM chatbot (ip: 1.2.3.4, device: desktop/macOS)
+ *     Outcome: answered by chatbot
+ *     Intent: gym_routine
+ *     Lead stage: information_seeking
+ *     Status: answered
+ *
+ * The full answer text is NOT included — only the operational summary.
+ */
 export function renderRemarks(
   messages: Array<{ role: "user" | "assistant"; content: string; source?: string }>,
   date: Date = new Date(),
   context?: RemarkContext,
+  summary?: TurnSummary,
 ): string {
   const day = formatIstDate(date);
-  // Build the header line, appending IP + device if provided.
-  // Example: "[2026-09-25] Conversation captured via GEM chatbot (ip: 1.2.3.4, device: desktop/macOS)"
   const ctxParts: string[] = [];
   if (context?.ip) ctxParts.push(`ip: ${context.ip}`);
   if (context?.device) ctxParts.push(`device: ${context.device}`);
@@ -68,19 +91,29 @@ export function renderRemarks(
   const lines: string[] = [
     `[${day}] Conversation captured via GEM chatbot${ctxSuffix}`,
   ];
-  for (const m of messages) {
-    const time = formatIstTime(date);
-    const tag = m.source === "fallback" ? "bot (handoff)" : m.role;
-    // Preserve the full content verbatim — do NOT trim or collapse whitespace.
-    // The remarks column is a TEXT field in Supabase and can hold full content.
-    const content = m.content.trim();
-    // Indent continuation lines so multi-line content stays readable
-    // inside the per-message remark block.
-    const indented = content
-      .split("\n")
-      .map((l, i) => (i === 0 ? l : `      ${l}`))
-      .join("\n");
-    lines.push(`  ${time} IST — ${tag}: ${indented}`);
+
+  if (summary) {
+    // ── New format: operational summary only, no full transcript ──
+    // Always show Outcome first, then the rest in insertion order.
+    const ordered: Record<string, string> = { Outcome: summary.outcome };
+    for (const [k, v] of Object.entries(summary.fields)) {
+      if (k !== "Outcome") ordered[k] = v;
+    }
+    for (const [k, v] of Object.entries(ordered)) {
+      lines.push(`  ${k}: ${v}`);
+    }
+  } else {
+    // ── Legacy format: full transcript (used for initial lead save) ──
+    for (const m of messages) {
+      const time = formatIstTime(date);
+      const tag = m.source === "fallback" ? "bot (handoff)" : m.role;
+      const content = m.content.trim();
+      const indented = content
+        .split("\n")
+        .map((l, i) => (i === 0 ? l : `      ${l}`))
+        .join("\n");
+      lines.push(`  ${time} IST — ${tag}: ${indented}`);
+    }
   }
   return lines.join("\n");
 }
@@ -152,8 +185,9 @@ export async function saveContactWithConversation(
   lead: Lead,
   messages: Array<{ role: "user" | "assistant"; content: string; source?: string }>,
   context?: RemarkContext,
+  summary?: TurnSummary,
 ): Promise<ContactWriteResult> {
-  const newBlock = renderRemarks(messages, new Date(), context);
+  const newBlock = renderRemarks(messages, new Date(), context, summary);
 
   let existing: Record<string, unknown> | null = null;
   try {
