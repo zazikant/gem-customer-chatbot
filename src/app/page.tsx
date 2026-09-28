@@ -25,7 +25,6 @@ import {
   type Lead,
 } from "@/lib/lead-capture";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { MessageContent } from "@/components/chat/message-content";
 import { Send } from "lucide-react";
 
@@ -64,6 +63,7 @@ export default function Home() {
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Load non-secret business contact on mount
   useEffect(() => {
@@ -85,6 +85,20 @@ export default function Home() {
       setMessages([{ role: "assistant", content: captureState.prompt }]);
     }
   }, []);
+
+  // Auto-focus the input on mount so the user can start typing immediately
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  // Auto-focus the input after streaming completes so the user can
+  // type their next message without clicking the input box.
+  useEffect(() => {
+    if (!streaming) {
+      const t = setTimeout(() => inputRef.current?.focus(), 50);
+      return () => clearTimeout(t);
+    }
+  }, [streaming]);
 
   // Auto-scroll on new content
   useEffect(() => {
@@ -433,7 +447,8 @@ export default function Home() {
         {/* ─── Input ─── */}
         <div className="shrink-0 border-t border-zinc-200 p-4 dark:border-zinc-800">
           <div className="flex gap-2">
-            <Input
+            <input
+              ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -446,7 +461,7 @@ export default function Home() {
                 isCapturePhase ? "Type your reply…" : "Ask a question…"
               }
               disabled={streaming}
-              className="flex-1"
+              className="flex h-10 w-full rounded-md border border-zinc-300 bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900"
             />
             <Button
               onClick={() => send(input)}
