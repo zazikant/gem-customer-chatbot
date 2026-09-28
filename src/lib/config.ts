@@ -65,7 +65,7 @@ export function getConfig(): RequiredConfig {
 
   cached = {
     opencodeApiKey,
-    opencodeModel: process.env.OPENCODE_MODEL?.trim() || "glm-5.1",
+    opencodeModel: process.env.OPENCODE_MODEL?.trim() || "glm-5.2",
     chatBrainUrl,
     csvChatBase: csvChatBase.replace(/\/+$/, ""),
     business,
